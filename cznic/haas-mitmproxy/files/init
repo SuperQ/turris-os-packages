@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+
+start_service() {
+	[ -f /etc/mitmkeys/id_rsa.pub ] || /usr/bin/mitmkeygen
+	IFACE="$(sed -n 's|^interface[[:blank:]]*=[[:blank:]]*||p' /etc/mitmproxy_wrapper.conf)"
+	LAN_IP="$(jsonfilter -s "$(ubus call network.interface dump)" -e "@.interface[@.interface='$IFACE'][\"ipv4-address\"][0][\"address\"]")"
+	[ -n "$(iptables -t nat -S | grep "comment haas-honeypot .*$LAN_IP")" ] || {
+		IP_RULE="$(iptables -t nat -S | grep "comment haas-honeypot ")"
+		[ -z "$IP_RULE" ] || iptables -t nat $(echo "$IP_RULE" | sed 's|^-A|^-D|')
+		[ -z "$LAN_IP" ] || iptables -A zone_wan_prerouting -p tcp -m tcp --dport 22 -m comment --comment haas-honeypot -j DNAT --to-destination $LAN_IP:2222
+	}
+	procd_open_instance
+	procd_set_param command /usr/bin/mitmproxy_wrapper /etc/mitmproxy_wrapper.conf
+	procd_set_param respawn ${respawn_threshold:-3600} ${respawn_timeout:-5} ${respawn_retry:-5}
+	procd_set_param file /etc/mitmproxy_wrapper.conf
+	procd_close_instance
+}
